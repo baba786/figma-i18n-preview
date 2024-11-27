@@ -59,14 +59,13 @@
       pointer-events: none;
     }
     
-    .preview-box {
-      padding: 16px;
-      border: 1px solid #E6E6E6;
-      border-radius: 4px;
-      min-height: 80px;
-      margin-bottom: 20px;
-      font-size: 14px;
+    .status-message {
+      font-size: 12px;
       color: #666666;
+      margin-bottom: 12px;
+      padding: 8px;
+      background: #F5F5F5;
+      border-radius: 4px;
     }
     
     .button {
@@ -85,6 +84,11 @@
     .button:hover {
       background: #0D8DE3;
     }
+
+    .button[disabled] {
+      background: #E6E6E6;
+      cursor: not-allowed;
+    }
   </style>
 </head>
 <body>
@@ -93,6 +97,10 @@
   </div>
   
   <div class="container">
+    <div class="status-message" id="statusMessage">
+      Select a frame to begin
+    </div>
+
     <div class="select-wrapper">
       <label class="select-label">Select Language</label>
       <select id="languageSelect">
@@ -106,13 +114,36 @@
       </select>
     </div>
     
-    <div class="preview-box" id="previewBox">
-      Select text in Figma to preview translations
-    </div>
-    
-    <button class="button" id="applyButton">
-      Apply Translation
+    <button class="button" id="duplicateButton" disabled>
+      Duplicate Frame
     </button>
   </div>
+
+  <script>
+    window.onmessage = (event) => {
+      const msg = event.data.pluginMessage;
+      const statusMessage = document.getElementById('statusMessage');
+      
+      if (msg.type === 'frameSelected') {
+        statusMessage.textContent = `Selected frame: ${msg.name}`;
+        document.getElementById('duplicateButton').removeAttribute('disabled');
+      } else if (msg.type === 'noFrameSelected') {
+        statusMessage.textContent = 'Select a frame to begin';
+        document.getElementById('duplicateButton').setAttribute('disabled', '');
+      }
+    };
+
+    document.getElementById('duplicateButton').onclick = () => {
+      const language = document.getElementById('languageSelect').value;
+      parent.postMessage({ 
+        pluginMessage: { 
+          type: 'duplicateFrame',
+          language: document.getElementById('languageSelect').options[
+            document.getElementById('languageSelect').selectedIndex
+          ].text
+        }
+      }, '*');
+    };
+  </script>
 </body>
 </html>
