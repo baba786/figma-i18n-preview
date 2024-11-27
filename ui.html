@@ -78,16 +78,17 @@
       font-size: 14px;
       font-weight: 500;
       cursor: pointer;
-      transition: background 0.2s;
+      transition: background 0.2s, opacity 0.2s;
     }
     
-    .button:hover {
+    .button:hover:not(:disabled) {
       background: #0D8DE3;
     }
 
-    .button[disabled] {
+    .button:disabled {
       background: #E6E6E6;
       cursor: not-allowed;
+      opacity: 0.5;
     }
 
     .steps {
@@ -135,11 +136,12 @@
     <div class="select-wrapper">
       <label class="select-label">Target Language</label>
       <select id="languageSelect">
-        <option value="en">English</option>
         <option value="es">Spanish</option>
         <option value="fr">French</option>
         <option value="de">German</option>
+        <option value="it">Italian</option>
         <option value="ja">Japanese</option>
+        <option value="ko">Korean</option>
         <option value="zh">Chinese</option>
         <option value="ar">Arabic</option>
       </select>
@@ -156,24 +158,43 @@
       document.getElementById(`step${currentStep}`).classList.add('current-step');
     }
 
+    function enableButton() {
+      const button = document.getElementById('translateButton');
+      button.removeAttribute('disabled');
+      button.style.opacity = '1';
+    }
+
+    function disableButton() {
+      const button = document.getElementById('translateButton');
+      button.setAttribute('disabled', '');
+      button.style.opacity = '0.5';
+    }
+
     window.onmessage = (event) => {
       const msg = event.data.pluginMessage;
       const statusMessage = document.getElementById('statusMessage');
       
       if (msg.type === 'frameSelected') {
         statusMessage.textContent = `Selected frame: ${msg.name}`;
-        document.getElementById('translateButton').removeAttribute('disabled');
+        enableButton();
         updateSteps(2);
       } else if (msg.type === 'noFrameSelected') {
         statusMessage.textContent = 'Select a frame to begin';
-        document.getElementById('translateButton').setAttribute('disabled', '');
+        disableButton();
         updateSteps(1);
       }
     };
 
     document.getElementById('translateButton').onclick = () => {
-      updateSteps(3);
+      const button = document.getElementById('translateButton');
       const select = document.getElementById('languageSelect');
+      
+      // Disable button during translation
+      button.disabled = true;
+      button.textContent = 'Translating...';
+      
+      updateSteps(3);
+      
       parent.postMessage({ 
         pluginMessage: { 
           type: 'translateFrame',
@@ -181,6 +202,12 @@
           languageCode: select.value
         }
       }, '*');
+      
+      // Re-enable button after a short delay
+      setTimeout(() => {
+        button.disabled = false;
+        button.textContent = 'Run Translation Test';
+      }, 2000);
     };
 
     document.getElementById('languageSelect').onchange = () => {
