@@ -89,6 +89,29 @@
       background: #E6E6E6;
       cursor: not-allowed;
     }
+
+    .steps {
+      margin-bottom: 16px;
+      padding: 12px;
+      background: #F5F5F5;
+      border-radius: 4px;
+    }
+    
+    .steps ol {
+      margin: 0;
+      padding-left: 20px;
+      font-size: 12px;
+      color: #666666;
+    }
+    
+    .steps li {
+      margin-bottom: 4px;
+    }
+    
+    .current-step {
+      color: #18A0FB;
+      font-weight: 500;
+    }
   </style>
 </head>
 <body>
@@ -97,12 +120,20 @@
   </div>
   
   <div class="container">
+    <div class="steps">
+      <ol>
+        <li id="step1" class="current-step">Select a frame in your design</li>
+        <li id="step2">Choose target language</li>
+        <li id="step3">Run translation test</li>
+      </ol>
+    </div>
+
     <div class="status-message" id="statusMessage">
       Select a frame to begin
     </div>
 
     <div class="select-wrapper">
-      <label class="select-label">Select Language</label>
+      <label class="select-label">Target Language</label>
       <select id="languageSelect">
         <option value="en">English</option>
         <option value="es">Spanish</option>
@@ -114,35 +145,48 @@
       </select>
     </div>
     
-    <button class="button" id="duplicateButton" disabled>
-      Duplicate Frame
+    <button class="button" id="translateButton" disabled>
+      Run Translation Test
     </button>
   </div>
 
   <script>
+    function updateSteps(currentStep) {
+      document.querySelectorAll('.steps li').forEach(li => li.classList.remove('current-step'));
+      document.getElementById(`step${currentStep}`).classList.add('current-step');
+    }
+
     window.onmessage = (event) => {
       const msg = event.data.pluginMessage;
       const statusMessage = document.getElementById('statusMessage');
       
       if (msg.type === 'frameSelected') {
         statusMessage.textContent = `Selected frame: ${msg.name}`;
-        document.getElementById('duplicateButton').removeAttribute('disabled');
+        document.getElementById('translateButton').removeAttribute('disabled');
+        updateSteps(2);
       } else if (msg.type === 'noFrameSelected') {
         statusMessage.textContent = 'Select a frame to begin';
-        document.getElementById('duplicateButton').setAttribute('disabled', '');
+        document.getElementById('translateButton').setAttribute('disabled', '');
+        updateSteps(1);
       }
     };
 
-    document.getElementById('duplicateButton').onclick = () => {
-      const language = document.getElementById('languageSelect').value;
+    document.getElementById('translateButton').onclick = () => {
+      updateSteps(3);
+      const select = document.getElementById('languageSelect');
       parent.postMessage({ 
         pluginMessage: { 
-          type: 'duplicateFrame',
-          language: document.getElementById('languageSelect').options[
-            document.getElementById('languageSelect').selectedIndex
-          ].text
+          type: 'translateFrame',
+          language: select.options[select.selectedIndex].text,
+          languageCode: select.value
         }
       }, '*');
+    };
+
+    document.getElementById('languageSelect').onchange = () => {
+      if (!document.getElementById('translateButton').disabled) {
+        updateSteps(3);
+      }
     };
   </script>
 </body>
