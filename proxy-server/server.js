@@ -2,8 +2,13 @@ const express = require('express');
 const cors = require('cors');
 const app = express();
 
-// Your Claude API key
-const CLAUDE_API_KEY = 'YOUR_CLAUDE_API_KEY';
+// Import config (will use example if config.js doesn't exist)
+let config;
+try {
+  config = require('./config.js');
+} catch (e) {
+  config = require('./config.example.js');
+}
 
 // Enable CORS for all origins during development
 app.use(cors({
@@ -21,6 +26,10 @@ app.get('/health', (req, res) => {
 
 app.post('/translate', async (req, res) => {
   try {
+    if (!config.CLAUDE_API_KEY) {
+      throw new Error('API key not configured');
+    }
+
     const { text, targetLang } = req.body;
     
     if (!text || !targetLang) {
@@ -34,7 +43,7 @@ app.post('/translate', async (req, res) => {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        'x-api-key': CLAUDE_API_KEY,
+        'x-api-key': config.CLAUDE_API_KEY,
         'anthropic-version': '2023-06-01',
         'content-type': 'application/json',
       },
@@ -49,6 +58,8 @@ app.post('/translate', async (req, res) => {
     });
 
     if (!response.ok) {
+      const errorData = await response.text();
+      console.error('Claude API error:', errorData);
       throw new Error(`Claude API responded with ${response.status}`);
     }
 
@@ -63,7 +74,7 @@ app.post('/translate', async (req, res) => {
   }
 });
 
-const PORT = process.env.PORT || 3000;
+const PORT = config.PORT || 3000;
 
 // Try multiple ports if the default is in use
 function startServer(port) {
