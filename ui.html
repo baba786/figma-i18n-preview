@@ -91,6 +91,12 @@
       opacity: 0.5;
     }
 
+    .button.active {
+      background: #18A0FB;
+      opacity: 1;
+      cursor: pointer;
+    }
+
     .steps {
       margin-bottom: 16px;
       padding: 12px;
@@ -153,32 +159,41 @@
   </div>
 
   <script>
+    let frameSelected = false;
+
     function updateSteps(currentStep) {
       document.querySelectorAll('.steps li').forEach(li => li.classList.remove('current-step'));
       document.getElementById(`step${currentStep}`).classList.add('current-step');
     }
 
     function enableButton() {
+      console.log('Enabling button');
       const button = document.getElementById('translateButton');
-      button.removeAttribute('disabled');
-      button.style.opacity = '1';
+      button.disabled = false;
+      button.classList.add('active');
+      frameSelected = true;
     }
 
     function disableButton() {
+      console.log('Disabling button');
       const button = document.getElementById('translateButton');
-      button.setAttribute('disabled', '');
-      button.style.opacity = '0.5';
+      button.disabled = true;
+      button.classList.remove('active');
+      frameSelected = false;
     }
 
     window.onmessage = (event) => {
       const msg = event.data.pluginMessage;
+      console.log('Received message:', msg);
       const statusMessage = document.getElementById('statusMessage');
       
       if (msg.type === 'frameSelected') {
+        console.log('Frame selected:', msg.name);
         statusMessage.textContent = `Selected frame: ${msg.name}`;
         enableButton();
         updateSteps(2);
       } else if (msg.type === 'noFrameSelected') {
+        console.log('No frame selected');
         statusMessage.textContent = 'Select a frame to begin';
         disableButton();
         updateSteps(1);
@@ -186,6 +201,8 @@
     };
 
     document.getElementById('translateButton').onclick = () => {
+      if (!frameSelected) return;
+      
       const button = document.getElementById('translateButton');
       const select = document.getElementById('languageSelect');
       
@@ -211,10 +228,17 @@
     };
 
     document.getElementById('languageSelect').onchange = () => {
-      if (!document.getElementById('translateButton').disabled) {
+      if (frameSelected) {
         updateSteps(3);
       }
     };
+
+    // Check if there's an initial frame selection
+    parent.postMessage({ 
+      pluginMessage: { 
+        type: 'checkInitialSelection'
+      }
+    }, '*');
   </script>
 </body>
 </html>
