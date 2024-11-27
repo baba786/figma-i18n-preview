@@ -2,14 +2,16 @@ figma.showUI(__html__, { width: 340, height: 400 });
 
 let sourceFrame = null;
 
-// Immediately check for selection when plugin starts
-const initialSelection = figma.currentPage.selection;
-if (initialSelection.length === 1 && initialSelection[0].type === "FRAME") {
-  sourceFrame = initialSelection[0];
-  figma.ui.postMessage({ 
-    type: 'frameSelected',
-    name: sourceFrame.name
-  });
+// Load the font before making changes
+async function loadFonts(node) {
+  if (node.type === 'TEXT') {
+    await figma.loadFontAsync(node.fontName);
+  }
+  if ('children' in node) {
+    for (const child of node.children) {
+      await loadFonts(child);
+    }
+  }
 }
 
 async function checkServer() {
@@ -56,6 +58,43 @@ async function translateText(text, targetLang) {
   }
 }
 
+async function translateNode(node, targetLang) {
+  // Load fonts before modifying text
+  await loadFonts(node);
+
+  if (node.type === "TEXT") {
+    try {
+      const originalText = node.characters;
+      const translatedText = await translateText(originalText, targetLang);
+      
+      // Store original text as a plugin data
+      node.setPluginData('originalText', originalText);
+      
+      // Update the text
+      node.characters = translatedText;
+      
+      // Handle RTL languages
+      if (targetLang === 'ar') {
+        node.textAlignHorizontal = 'RIGHT';
+      }
+      
+      // Preserve styles and properties
+      if (node.textAutoResize) {
+        node.textAutoResize = "WIDTH_AND_HEIGHT";
+      }
+    } catch (error) {
+      console.error(`Failed to translate node: ${node.characters}`, error);
+    }
+  }
+  
+  // Recursively translate children
+  if ("children" in node) {
+    for (const child of node.children) {
+      await translateNode(child, targetLang);
+    }
+  }
+}
+
 figma.on('selectionchange', () => {
   console.log('Selection changed');
   const selection = figma.currentPage.selection;
@@ -85,46 +124,36 @@ figma.ui.onmessage = async (msg) => {
 
     figma.notify(`Creating ${msg.language} version...`, { timeout: 2000 });
 
-    const duplicate = sourceFrame.clone();
-    duplicate.x = sourceFrame.x + sourceFrame.width + 100;
-    duplicate.y = sourceFrame.y;
-    duplicate.name = `${sourceFrame.name} - ${msg.language}`;
-    
     try {
-      // Find all text nodes in the duplicated frame
-      const textNodes = [];
-      function findTextNodes(node) {
-        if (node.type === "TEXT") {
-          textNodes.push(node);
-        }
-        if ("children" in node) {
-          for (const child of node.children) {
-            findTextNodes(child);
-          }
-        }
-      }
-      findTextNodes(duplicate);
+      // Clone the frame
+      const duplicate = sourceFrame.clone();
+      duplicate.x = sourceFrame.x + sourceFrame.width + 100;
+      duplicate.y = sourceFrame.y;
+      duplicate.name = `${sourceFrame.name} - ${msg.language}`;
 
-      // Process each text node
-      for (const node of textNodes) {
-        try {
-          const originalText = node.characters;
-          console.log('Processing text node:', originalText);
-          const translatedText = await translateText(originalText, msg.languageCode);
-          node.characters = translatedText;
-
-          // Handle RTL languages
-          if (msg.languageCode === 'ar') {
-            node.textAlignHorizontal = 'RIGHT';
-          }
-        } catch (error) {
-          console.error(`Failed to translate text: ${node.characters}`, error);
-        }
-      }
+      // Translate all text nodes in the duplicated frame
+      await translateNode(duplicate, msg.languageCode);
 
       figma.notify(`✅ Frame translated to ${msg.language}`, { timeout: 2000 });
+      
+      // Select the newly created frame
+      figma.currentPage.selection = [duplicate];
+      
+      // Optional: Zoom to the new frame
+      figma.viewport.scrollAndZoomIntoView([duplicate]);
+      
     } catch (error) {
       figma.notify(`❌ Error during translation: ${error.message}`, { timeout: 3000 });
     }
   }
 };
+
+// Check initial selection
+const initialSelection = figma.currentPage.selection;
+if (initialSelection.length === 1 && initialSelection[0].type === "FRAME") {
+  sourceFrame = initialSelection[0];
+  figma.ui.postMessage({ 
+    type: 'frameSelected',
+    name: sourceFrame.name
+  });
+}
