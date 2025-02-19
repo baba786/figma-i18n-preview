@@ -7,6 +7,38 @@
       margin: 0;
       background: #FFFFFF;
     }
+
+    .advanced-options {
+      margin-bottom: 20px;
+    }
+
+    .advanced-summary {
+      font-size: 12px;
+      font-weight: 500;
+      color: #666666;
+      cursor: pointer;
+      padding: 8px 0;
+      user-select: none;
+    }
+
+    .checkbox-group {
+      padding: 8px 0;
+    }
+
+    .checkbox-item {
+      display: flex;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+
+    .checkbox-item input {
+      margin-right: 8px;
+    }
+
+    .checkbox-item label {
+      font-size: 11px;
+      color: #333333;
+    }
     
     .header {
       padding: 16px 20px;
@@ -152,6 +184,34 @@
         <option value="ar">Arabic</option>
       </select>
     </div>
+
+    <div class="advanced-options">
+      <details>
+        <summary class="advanced-summary">Advanced Filtering Options</summary>
+        <div class="checkbox-group">
+          <div class="checkbox-item">
+            <input type="checkbox" id="skipUiElements" checked>
+            <label for="skipUiElements">Skip UI elements (buttons, menus, icons)</label>
+          </div>
+          <div class="checkbox-item">
+            <input type="checkbox" id="skipURLsEmails" checked>
+            <label for="skipURLsEmails">Skip URLs and email addresses</label>
+          </div>
+          <div class="checkbox-item">
+            <input type="checkbox" id="skipDates" checked>
+            <label for="skipDates">Skip dates and timestamps</label>
+          </div>
+          <div class="checkbox-item">
+            <input type="checkbox" id="skipPlaceholders" checked>
+            <label for="skipPlaceholders">Skip placeholder text</label>
+          </div>
+          <div class="checkbox-item">
+            <input type="checkbox" id="skipInstances" checked>
+            <label for="skipInstances">Skip text in component instances</label>
+          </div>
+        </div>
+      </details>
+    </div>
     
     <button class="button" id="translateButton" disabled>
       Run Translation Test
@@ -206,6 +266,15 @@
       const button = document.getElementById('translateButton');
       const select = document.getElementById('languageSelect');
       
+      // Get filter settings
+      const filterSettings = {
+        skipUiElements: document.getElementById('skipUiElements').checked,
+        skipURLsEmails: document.getElementById('skipURLsEmails').checked,
+        skipDates: document.getElementById('skipDates').checked,
+        skipPlaceholders: document.getElementById('skipPlaceholders').checked,
+        skipInstances: document.getElementById('skipInstances').checked
+      };
+      
       // Disable button during translation
       button.disabled = true;
       button.textContent = 'Translating...';
@@ -216,9 +285,11 @@
         pluginMessage: { 
           type: 'translateFrame',
           language: select.options[select.selectedIndex].text,
-          languageCode: select.value
+          languageCode: select.value,
+          filterSettings: filterSettings
         }
       }, '*');
+     
       
       // Re-enable button after a short delay
       setTimeout(() => {
