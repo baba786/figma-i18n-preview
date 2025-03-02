@@ -2,9 +2,6 @@
 // Show UI
 // ====================
 
-// Global flag for Claude-based styling
-let useClaudeStylingForTranslations = false;
-
 // Language-specific expansion factors (approximate percentages)
 const EXPANSION_FACTORS = {
   'es': 1.3,  // Spanish ~30% longer than English
@@ -26,42 +23,34 @@ figma.showUI(__html__, { width: 340, height: 500 });
 // Global error handling, server checks, etc.
 // ====================
 
-// Enhanced server connectivity check with better debugging
+// Check server connectivity on startup
 async function checkServerConnectivity() {
-  console.log('[SERVER] 🔌 Checking server connectivity...');
-  
   try {
-    // First try the health endpoint
-    console.log('[SERVER] 🔌 Testing health endpoint...');
-    const healthResponse = await fetch('http://localhost:3000/health', {
+    console.log('Checking server connectivity...');
+    const response = await fetch('http://localhost:3000/test', {
       method: 'GET',
-      headers: { 'Accept': 'application/json' }
+      cache: 'no-cache'
     });
     
-    if (healthResponse.ok) {
-      const healthData = await healthResponse.json();
-      console.log('[SERVER] ✅ Health endpoint responded:', healthData);
+    if (response.ok) {
+      const data = await response.json();
+      console.log('Server check successful:', data);
+      figma.ui.postMessage({ 
+        type: 'serverStatus', 
+        status: 'connected',
+        details: data
+      });
       return true;
+    } else {
+      throw new Error(`Server responded with status: ${response.status}`);
     }
-    
-    console.log('[SERVER] ⚠️ Health endpoint failed, trying test endpoint...');
-    
-    // Fallback to test endpoint
-    const testResponse = await fetch('http://localhost:3000/test', {
-      method: 'GET',
-      headers: { 'Accept': 'application/json' }
-    });
-    
-    if (testResponse.ok) {
-      const testData = await testResponse.json();
-      console.log('[SERVER] ✅ Test endpoint responded:', testData);
-      return true;
-    }
-    
-    console.log('[SERVER] ❌ Test endpoint also failed');
-    return false;
   } catch (error) {
-    console.error('[SERVER] ❌ Server connectivity check failed:', error);
+    console.error('Server connectivity check failed:', error);
+    figma.ui.postMessage({ 
+      type: 'serverStatus', 
+      status: 'disconnected',
+      error: error.message
+    });
     return false;
   }
 }
@@ -326,17 +315,9 @@ async function checkTextOverflow(node, translatedText, fontToUse, isRTL) {
  * EXISTING HELPERS (UPDATED WHERE NEEDED)
  *****************************************************/
 
-async function safeTranslateNode(node, targetLang, totalNodes = 0, filterSettings = {}, currentNode = null, forceRetranslate = false, preserveStyles = true) {
+async function safeTranslateNode(node, targetLang, totalNodes = 0, filterSettings = {}, forceRetranslate = false) {
   try {
-    return await translateNode(
-      node, 
-      targetLang, 
-      totalNodes, 
-      filterSettings, 
-      currentNode || { count: 0 }, 
-      forceRetranslate,
-      preserveStyles
-    );
+    return await translateNode(node, targetLang, totalNodes, filterSettings, { count: 0 }, forceRetranslate);
   } catch (error) {
     console.error('Translation error:', error);
     return false;
@@ -594,26 +575,23 @@ async function translateLanguageList(node, targetLang) {
 
 // Enhanced simple translation function that preserves styles
 async function simpleTranslateText(node, targetLang, forceRetranslate = false) {
-  const originalText = node.characters;
-  if (!originalText) return false;
-  
+  if (!node || !node.characters || node.characters.trim() === '') {
+    return null;
+  }
+
   try {
-    console.log(`[DEBUG] 🌍 Simple translate for node: "${originalText.substring(0, 30)}${originalText.length > 30 ? '...' : ''}"`);
-    const translation = await translateText(originalText, targetLang, [], forceRetranslate);
+    const originalText = node.characters;
+    const translatedText = await translateText(originalText, targetLang, forceRetranslate);
     
-    // Handle the new return format
-    const translatedText = translation.translatedText || originalText;
-    
-    await applySimpleTranslation(node, translatedText);
-    return true;
-  } catch (error) {
-    console.log(`[DEBUG] ❌ Simple translate error: ${error.message}`);
-    return false;
+    // ... rest of function remains the same ...
+  } catch (e) {
+    console.error('Simple translation error:', e);
+    return null;
   }
 }
 
 // Replace current translateNode function with this simplified version
-async function translateNode(node, targetLang, totalNodes, filterSettings = {}, currentNode = { count: 0 }, forceRetranslate = false, preserveStyles = true) {
+async function translateNode(node, targetLang, totalNodes, filterSettings = {}, currentNode = { count: 0 }, forceRetranslate = false) {
   // Skip filtering logic based on node type
   const skipInstances = filterSettings && filterSettings.skipInstances;
   
@@ -627,7 +605,7 @@ async function translateNode(node, targetLang, totalNodes, filterSettings = {}, 
         console.log('Instance detached successfully:', detached.name);
         
         // Process the detached node directly
-        await translateNode(detached, targetLang, totalNodes, filterSettings, currentNode, forceRetranslate, preserveStyles);
+        await translateNode(detached, targetLang, totalNodes, filterSettings, currentNode, forceRetranslate);
         return;
       } catch (err) {
         console.error('Error detaching instance:', err);
@@ -642,9 +620,7 @@ async function translateNode(node, targetLang, totalNodes, filterSettings = {}, 
         id: node.id, 
         name: node.name,
         text: originalText,
-        parent: (node.parent && node.parent.name) ? node.parent.name : 'none',
-        forceRetranslate: forceRetranslate,
-        preserveStyles: preserveStyles
+        parent: (node.parent && node.parent.name) ? node.parent.name : 'none'
       });
       
       if (!originalText || shouldSkipNode(node, filterSettings)) {
@@ -656,73 +632,45 @@ async function translateNode(node, targetLang, totalNodes, filterSettings = {}, 
       
       // ========= TRANSLATE TEXT =========
       try {
-        console.log('[NETWORK] 🌐 Starting translation request for:', originalText);
-        console.log('[NETWORK] 🌐 Target language:', targetLang);
-        console.log('[NETWORK] 🌐 Force retranslate:', forceRetranslate);
+        console.log('Requesting translation for:', originalText);
+        const response = await fetch('http://localhost:3000/translate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: originalText, targetLang })
+        });
         
-        // Collect style ranges if we're preserving styles
-        let styleRanges = [];
-        if (preserveStyles) {
-          // Use Claude-based styling if enabled globally
-          if (useClaudeStylingForTranslations) {
-            console.log('[NETWORK] 🎨 Using Claude for style preservation');
-            // Find style ranges to send with translation request
-            styleRanges = await findStyleRanges(node, originalText);
-          }
-        }
+        const data = await response.json();
+        console.log('Translation received:', data.translation);
         
-        // Get translated text with or without style information
-        const translationResult = await translateText(originalText, targetLang, styleRanges, forceRetranslate);
-        
-        if (!translationResult || !translationResult.translatedText) {
-          throw new Error('Translation failed: no text returned');
-        }
-        
-        const translatedText = translationResult.translatedText;
-        const styleMapping = translationResult.styleMapping;
-        
-        console.log(`Translation result: "${translatedText}"`);
-        
-        // Apply the translated text to node with style preservation if enabled
-        if (preserveStyles) {
-          console.log('Applying translation with style preservation');
-          await preserveTextStyles(node, originalText, translatedText, targetLang, styleMapping);
-        } else {
-          console.log('Applying translation without style preservation');
-          await figma.loadFontAsync(node.fontName);
-          node.characters = translatedText;
-        }
+        // Use our new general-purpose style preservation function
+        await preserveTextStyles(node, originalText, data.translation, targetLang);
         
         // Handle RTL languages
-        const isRTL = isRTLLanguage(targetLang, translatedText);
+        const isRTL = isRTLLanguage(targetLang, data.translation);
         if (isRTL) {
-          console.log('Applying RTL text properties');
-          await handleRTLProperties(node, targetLang, translatedText);
-        }
-        
-        // Update progress
-        currentNode.count++;
-        if (totalNodes > 0) {
-          const progress = Math.round((currentNode.count / totalNodes) * 100);
-          figma.ui.postMessage({ 
-            type: 'translationProgress', 
-            progress,
-            originalText: originalText.substring(0, 30) + (originalText.length > 30 ? '...' : ''),
-            translatedText: translatedText.substring(0, 30) + (translatedText.length > 30 ? '...' : '')
-          });
+          handleRTLProperties(node, targetLang, data.translation);
         }
       } catch (error) {
         console.error('Translation or style application error:', error);
+        // Try enhanced translation with style preservation as fallback
         try {
-          // Fallback to simpler translation without style preservation
-          console.log('Using fallback translation method');
-          await figma.loadFontAsync(node.fontName);
-          node.characters = originalText; // Ensure we have something
-        } catch (fallbackError) {
-          console.error('Even fallback failed:', fallbackError);
+          console.log('Trying enhanced translation with style preservation as fallback');
+          // Our simpleTranslateText is now enhanced with style preservation
+          await simpleTranslateText(node, targetLang, forceRetranslate);
+        } catch (e) {
+          console.error('Style-preserving translation fallback failed:', e);
         }
       }
       
+      // Update progress
+      currentNode.count++;
+      figma.ui.postMessage({ 
+        type: 'translationProgress',
+        progress: Math.round((currentNode.count / totalNodes) * 100),
+        originalText,
+        translatedText: node.characters
+      });
+
       // 3. After applying translation, add direct verification
       console.log('TRANSLATION APPLIED:', {
         original: originalText,
@@ -742,7 +690,7 @@ async function translateNode(node, targetLang, totalNodes, filterSettings = {}, 
     // Process children
     if (node.children) {
       for (const child of node.children) {
-        await translateNode(child, targetLang, totalNodes, filterSettings, currentNode, forceRetranslate, preserveStyles);
+        await translateNode(child, targetLang, totalNodes, filterSettings, currentNode, forceRetranslate);
       }
     }
   } catch (error) {
@@ -1143,24 +1091,7 @@ figma.ui.onmessage = async (msg) => {
         figma.notify('Processing component instances... This may take a moment.');
       }
 
-      // Get style preservation settings
-      const preserveStyles = msg.preserveStyles !== undefined ? msg.preserveStyles : true;
-      const useClaudeStyling = msg.useClaudeStyling !== undefined ? msg.useClaudeStyling : true;
-      
-      console.log(`[DEBUG] 🎨 Style settings - Preserve: ${preserveStyles}, Use Claude: ${useClaudeStyling}`);
-      
-      // Initialize global flag for Claude-based styling
-      useClaudeStylingForTranslations = useClaudeStyling;
-      
-      await safeTranslateNode(
-        clonedFrame, 
-        msg.languageCode, 
-        textNodeCount, 
-        msg.filterSettings, 
-        null, 
-        msg.forceRetranslate,
-        preserveStyles
-      );
+      await safeTranslateNode(clonedFrame, msg.languageCode, textNodeCount, msg.filterSettings);
 
       figma.currentPage.selection = [clonedFrame];
       figma.viewport.scrollAndZoomIntoView([clonedFrame]);
@@ -1169,43 +1100,12 @@ figma.ui.onmessage = async (msg) => {
         type: 'translationComplete',
         message: 'Translation completed!'
       });
+
     } catch (error) {
       console.error('Translation error:', error);
       figma.ui.postMessage({ 
-        type: 'error',
-        message: `Translation error: ${error.message}`
-      });
-    }
-  } else if (msg.type === 'checkInitialSelection') {
-    // Check if there's a frame selected when the plugin starts
-    try {
-      const selection = figma.currentPage.selection;
-      if (selection.length === 1 && selection[0].type === "FRAME") {
-        figma.ui.postMessage({ 
-          type: 'frameSelected',
-          name: selection[0].name
-        });
-      } else {
-        figma.ui.postMessage({ type: 'noFrameSelected' });
-      }
-    } catch (error) {
-      console.error('Error checking initial selection:', error);
-      figma.ui.postMessage({ type: 'noFrameSelected' });
-    }
-  } else if (msg.type === 'clearCache') {
-    // Handle cache clearing
-    try {
-      clearTranslationCache(msg.language);
-      figma.ui.postMessage({ 
-        type: 'cacheCleared',
-        language: msg.language
-      });
-      figma.notify(`Translation cache ${msg.language ? 'for ' + msg.language : ''} cleared`);
-    } catch (error) {
-      console.error('Error clearing cache:', error);
-      figma.ui.postMessage({ 
-        type: 'error',
-        message: `Error clearing cache: ${error.message}`
+        type: 'translationComplete',
+        message: 'Translation failed'
       });
     }
   }
@@ -1213,21 +1113,11 @@ figma.ui.onmessage = async (msg) => {
 // Add server check on plugin start
 checkServerConnectivity().then(isConnected => {
   if (isConnected) {
-    console.log('[SERVER] ✅ Server is connected');
-    figma.notify('Translation server connected');
-    figma.ui.postMessage({ 
-      type: 'serverStatus', 
-      status: 'connected',
-      message: 'Translation server is connected and ready'
-    });
+    console.log('Server is connected');
+    figma.notify('Server connected');
   } else {
-    console.log('[SERVER] ❌ Server is not connected');
-    figma.notify('Translation server not connected. Please make sure the server is running at http://localhost:3000', { error: true });
-    figma.ui.postMessage({ 
-      type: 'serverStatus', 
-      status: 'disconnected',
-      message: 'Translation server is not running. Please start the proxy server first.'
-    });
+    console.log('Server is not connected');
+    figma.notify('Server not connected', { error: true });
   }
 });
 
@@ -2238,85 +2128,52 @@ function clearTranslationCache(targetLang = null) {
   }
 }
 
-// Function to translate text with style preservation instructions
-async function translateText(originalText, targetLang, styleRanges = [], forceRetranslate = false) {
-  if (!originalText || originalText.trim() === '') {
-    console.log(`[DEBUG] ⚠️ Empty text, skipping translation`);
-    return originalText;
+// Modify translateText to add force option
+function translateText(originalText, targetLang, forceRetranslate = false) {
+  // Skip cache if force retranslation is requested
+  if (!forceRetranslate && clientTranslationCache[targetLang]?.hasOwnProperty(originalText)) {
+    console.log(`Client cache hit for "${originalText}" to ${targetLang}`);
+    return Promise.resolve(clientTranslationCache[targetLang][originalText]);
   }
 
-  console.log(`[DEBUG] 🌍 Requesting translation for: "${originalText}" to ${targetLang}`);
-  
-  try {
-    // Prepare style information if preserving styles and styleRanges provided
-    const styleInfo = styleRanges.length > 0 ? styleRanges.map(sr => {
-      return {
-        text: originalText.substring(sr.range.start, sr.range.end),
-        color: sr.color || '#0000FF'
-      };
-    }) : null;
-    
-    // Try ports 3000-3005 until we find a working server
-    let serverError = null;
-    for (let port = 3000; port <= 3005; port++) {
-      try {
-        const response = await fetch(`http://localhost:${port}/translate`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            text: originalText,
-            targetLang: targetLang,
-            forceRetranslate: forceRetranslate,
-            styleInfo: styleInfo
-          })
-        });
-
-        if (!response.ok) {
-          throw new Error(`Translation API error: ${response.status}`);
-        }
-
-        // If we get here, the request succeeded
-        const data = await response.json();
-        console.log(`[DEBUG] 🌍 Received translation from port ${port}: "${data.translation}"`);
-        
-        if (data.styleMapping) {
-          console.log(`[DEBUG] 🎨 Received style mapping:`, JSON.stringify(data.styleMapping));
-        }
-        
-        return {
-          translatedText: data.translation,
-          styleMapping: data.styleMapping || null
-        };
-      } catch (portError) {
-        console.log(`[DEBUG] ⚠️ Failed to connect to server on port ${port}: ${portError.message}`);
-        serverError = portError;
-        // Continue to try the next port
-      }
+  // If not in cache or forced, proceed with server request
+  return fetch('http://localhost:3000/translate', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      text: originalText,
+      targetLang: targetLang,
+      forceRetranslate // Pass this to server
+    })
+  })
+  .then(response => {
+    if (!response.ok) {
+      throw new Error(`Server error: ${response.status}`);
     }
+    return response.json();
+  })
+  .then(data => {
+    const translation = data.translation;
     
-    // If we get here, all ports failed
-    throw serverError || new Error('Could not connect to any translation server port (3000-3005)');
-  } catch (error) {
-    console.log(`[DEBUG] ❌ Translation error: ${error.message}`);
+    // Save to client-side cache
+    if (!clientTranslationCache[targetLang]) {
+      clientTranslationCache[targetLang] = {};
+    }
+    clientTranslationCache[targetLang][originalText] = translation;
     
-    // Create a fallback translation for demonstration purposes
-    const fallbackText = createFallbackTranslation(originalText, targetLang);
-    console.log(`[DEBUG] ⚠️ Using fallback text: "${fallbackText}"`);
-    
-    return {
-      translatedText: fallbackText,
-      error: error.message
-    };
-  }
+    return translation;
+  })
+  .catch(error => {
+    console.error('Translation error:', error);
+    // Return a fallback
+    return createFallbackTranslation(originalText, targetLang);
+  });
 }
 
-// Global cache for style mappings returned by the translation API
-const translationStyleMappings = {};
-
 // Core translation function
-function translateText(originalText, targetLang) {
+function disabledTranslateText(originalText, targetLang) {
   return fetch('http://localhost:3000/translate', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -2582,251 +2439,114 @@ async function loadRunFont(styleRange) {
   }
 }
 
-// Preserve text styles during translation
-async function preserveTextStyles(node, originalText, translatedText, targetLang, styleMapping) {
-  try {
-    console.log(`[DEBUG] 🎨 Preserving text styles for translation to ${targetLang}`);
-    
-    // Load the font before applying any styles
-    await figma.loadFontAsync(node.fontName);
-    
-    // First set the plain translated text
-    node.characters = translatedText;
-    
-    // Find style ranges in the original text
-    const styleRanges = await findStyleRanges(node, originalText);
-    console.log(`[DEBUG] 🎨 Style ranges found in original text:`, 
-      JSON.stringify(styleRanges.map(sr => ({
-        text: sr.range ? originalText.substring(sr.range.start, sr.range.end) : "unknown",
-        start: sr.range && sr.range.start,
-        end: sr.range && sr.range.end,
-        isSpecial: sr.isSpecial
-      })))
-    );
-    
-    // If we have Claude-provided style mappings, try to apply them first
-    let stylesApplied = false;
-    if (styleMapping && styleMapping.length > 0) {
-      console.log(`[DEBUG] 🎨 Using Claude-provided style mappings (${styleMapping.length} mappings)`);
-      
-      try {
-        // Apply each style mapping from Claude
-        for (const mapping of styleMapping) {
-          console.log(`[DEBUG] 🎨 Processing mapping:`, JSON.stringify(mapping));
-          
-          // Find the original style that corresponds to this mapping
-          const matchingRange = styleRanges.find(range => {
-            if (!range || !range.range) return false;
-            const rangeText = originalText.substring(range.range.start, range.range.end);
-            const isMatch = rangeText.includes(mapping.originalText);
-            console.log(`[DEBUG] 🎨 Checking if "${rangeText}" includes "${mapping.originalText}": ${isMatch}`);
-            return isMatch;
-          });
-          
-          if (matchingRange && matchingRange.style) {
-            console.log(`[DEBUG] 🎨 Applying style to "${mapping.translatedText}" based on Claude's mapping`);
-            
-            // Find the position of the translated text to style
-            const startPos = translatedText.indexOf(mapping.translatedText);
-            if (startPos !== -1) {
-              const endPos = startPos + mapping.translatedText.length;
-              await applyStyleToRange(node, startPos, endPos, matchingRange.style);
-              stylesApplied = true;
-            } else {
-              console.log(`[DEBUG] ⚠️ Could not find "${mapping.translatedText}" in the translated text`);
-            }
-          } else {
-            console.log(`[DEBUG] ⚠️ Could not find matching style for "${mapping.originalText}"`);
-          }
-        }
-        
-        if (stylesApplied) {
-          console.log(`[DEBUG] 🎨 Successfully applied Claude-provided style mappings`);
-          return true;
-        }
-      } catch (error) {
-        console.log(`[DEBUG] ❌ Error applying Claude-provided style mappings: ${error.message}`);
-        // If Claude-based styling fails, fall back to our regular approach
-      }
-    }
-    
-    // If we couldn't apply Claude-provided mappings or if none were provided,
-    // fall back to our regular style-preservation approach
-    console.log(`[DEBUG] 🎨 Using fallback style preservation approach`);
-    
-    // Use existing styleRanges found earlier
-    // Safety check for styleRanges
-    if (!styleRanges || !Array.isArray(styleRanges) || styleRanges.length === 0) {
-      console.log(`[DEBUG] ⚠️ No style ranges found, applying translated text without styles`);
-      try {
-        // Just set the text without styles
-        node.characters = translatedText;
-        return true;
-      } catch (error) {
-        console.log(`[DEBUG] ❌ Error setting translated text: ${error.message}`);
-        return false;
-      }
-    }
-    
-    console.log(`[DEBUG] 🎨 Found ${styleRanges.length} style ranges in original text`);
-    
-    try {
-      // Check if any special language handlers need to be applied
-      const handledBySpecial = await handleSpecialTextPatterns(node, translatedText, originalText, styleRanges, targetLang);
-      
-      // If not handled by special patterns, use the regular mapping
-      if (!handledBySpecial) {
-        console.log(`[DEBUG] 🎨 Mapping styles to translated text using standard approach`);
-        await mapStylesToTranslation(node, styleRanges, originalText, translatedText, targetLang);
-      }
-      
-      return true;
-    } catch (error) {
-      console.log(`[DEBUG] ❌ Error preserving styles: ${error.message}`);
-      
-      // Fallback: just set the text without styles
-      try {
-        node.characters = translatedText;
-        return true;
-      } catch (fallbackError) {
-        console.log(`[DEBUG] ❌ Fallback failed: ${fallbackError.message}`);
-        return false;
-      }
-    }
-  } catch (error) {
-    console.log(`[DEBUG] ❌ Error in preserveTextStyles: ${error.message}`);
-    return false;
-  }
+// A general-purpose solution for preserving styles across translations
+async function preserveTextStyles(node, originalText, translatedText, targetLang) {
+  console.log(`Preserving styles from "${originalText}" to "${translatedText}"`);
+  
+  // Step 1: Find all distinct style ranges in the original text
+  const styleRanges = await findStyleRanges(node, originalText);
+  
+  // Step 2: Apply translated text to node
+  node.characters = translatedText;
+  
+  // Step 3: Apply the base/default style to entire text first
+  const defaultStyle = getDefaultStyle(styleRanges, node);
+  await applyStyleToRange(node, 0, translatedText.length, defaultStyle);
+  
+  // Step 4: Apply special styles by analyzing sentence structure
+  await mapStylesToTranslation(node, styleRanges, originalText, translatedText, targetLang);
+  
+  return true;
 }
 
 // Find all distinct style ranges in text
 async function findStyleRanges(node, text) {
-  console.log("[DEBUG] 🔍 Finding style ranges for:", text ? text.substring(0, 30) + "..." : "empty text");
+  console.log("Finding style ranges for:", text);
   const ranges = [];
+  let currentStyle = null;
+  let rangeStart = 0;
   
-  // Safety check for empty or undefined text
-  if (!text || text.length === 0) {
-    console.log("[DEBUG] ⚠️ Warning: Empty text provided to findStyleRanges");
-    return [];
+  // Check each character for style changes
+  for (let i = 0; i < text.length; i++) {
+    // Skip whitespace when determining styles
+    if (/\s/.test(text[i]) && i > rangeStart) continue;
+    
+    const style = {
+      fontName: node.getRangeFontName(i, i + 1),
+      fontSize: node.getRangeFontSize(i, i + 1),
+      fills: node.getRangeFills(i, i + 1),
+      textDecoration: node.getRangeTextDecoration(i, i + 1)
+    };
+    
+    const styleSignature = getStyleSignature(style);
+    
+    if (!currentStyle) {
+      // Replace spread operator with manual property assignment
+      currentStyle = {
+        fontName: style.fontName,
+        fontSize: style.fontSize,
+        fills: style.fills,
+        textDecoration: style.textDecoration,
+        signature: styleSignature
+      };
+    } else if (styleSignature !== currentStyle.signature) {
+      // Style changed, record the previous range
+      if (i > rangeStart) {
+        ranges.push({
+          text: text.substring(rangeStart, i),
+          start: rangeStart,
+          end: i,
+          style: currentStyle,
+          signature: currentStyle.signature
+        });
+      }
+      
+      // Start new range - avoid spread operator
+      currentStyle = {
+        fontName: style.fontName,
+        fontSize: style.fontSize,
+        fills: style.fills,
+        textDecoration: style.textDecoration,
+        signature: styleSignature
+      };
+      rangeStart = i;
+    }
   }
   
-  try {
-    // Safety check for node
-    if (!node || node.type !== "TEXT") {
-      console.log("[DEBUG] ⚠️ Warning: Invalid node provided to findStyleRanges");
-      return [];
-    }
+  // Add the final range
+  if (rangeStart < text.length) {
+    ranges.push({
+      text: text.substring(rangeStart),
+      start: rangeStart,
+      end: text.length,
+      style: currentStyle,
+      signature: currentStyle.signature
+    });
+  }
+  
+  // Identify the most common style (likely the default)
+  if (ranges.length > 0) {
+    const styleCounts = {};
+    let maxCount = 0;
+    let defaultSignature = ranges[0].signature;
     
-    let currentStyle = null;
-    let rangeStart = 0;
-    
-    // Check each character for style changes
-    for (let i = 0; i < text.length; i++) {
-      // Skip whitespace when determining styles
-      if (/\s/.test(text[i]) && i > rangeStart) continue;
-      
-      try {
-        const style = {
-          fontName: node.getRangeFontName(i, i + 1),
-          fontSize: node.getRangeFontSize(i, i + 1),
-          fills: node.getRangeFills(i, i + 1),
-          textDecoration: node.getRangeTextDecoration(i, i + 1)
-        };
-        
-        const styleSignature = getStyleSignature(style);
-        
-        if (!currentStyle) {
-          // Replace spread operator with manual property assignment
-          currentStyle = {
-            fontName: style.fontName,
-            fontSize: style.fontSize,
-            fills: style.fills,
-            textDecoration: style.textDecoration,
-            signature: styleSignature
-          };
-        } else if (styleSignature !== currentStyle.signature) {
-          // Style changed, record the previous range
-          if (i > rangeStart) {
-            ranges.push({
-              text: text.substring(rangeStart, i),
-              start: rangeStart,
-              end: i,
-              style: currentStyle,
-              signature: currentStyle.signature,
-              // Add explicit range property for consistency
-              range: {
-                start: rangeStart,
-                end: i
-              }
-            });
-          }
-          
-          // Start new range - avoid spread operator
-          currentStyle = {
-            fontName: style.fontName,
-            fontSize: style.fontSize,
-            fills: style.fills,
-            textDecoration: style.textDecoration,
-            signature: styleSignature
-          };
-          rangeStart = i;
-        }
-      } catch (charError) {
-        console.log(`[DEBUG] ⚠️ Error processing character at position ${i}: ${charError.message}`);
-        // Continue with next character
+    ranges.forEach(range => {
+      if (!styleCounts[range.signature]) {
+        styleCounts[range.signature] = 0;
       }
-    }
-    
-    // Add the final range
-    if (rangeStart < text.length && currentStyle) {
-      ranges.push({
-        text: text.substring(rangeStart),
-        start: rangeStart,
-        end: text.length,
-        style: currentStyle,
-        signature: currentStyle.signature,
-        // Add explicit range property for consistency
-        range: {
-          start: rangeStart,
-          end: text.length
-        }
-      });
-    }
-    
-    // Identify the most common style (likely the default)
-    if (ranges.length > 0) {
-      const styleCounts = {};
-      let maxCount = 0;
-      let defaultSignature = ranges[0].signature;
+      styleCounts[range.signature] += range.text.length;
       
-      ranges.forEach(range => {
-        if (!styleCounts[range.signature]) {
-          styleCounts[range.signature] = 0;
-        }
-        styleCounts[range.signature] += range.text.length;
-        
-        if (styleCounts[range.signature] > maxCount) {
-          maxCount = styleCounts[range.signature];
-          defaultSignature = range.signature;
-        }
-      });
-      
-      // Mark default and special ranges
-      ranges.forEach(range => {
-        range.isDefault = range.signature === defaultSignature;
-        range.isSpecial = !range.isDefault;
-        
-        // Ensure the range object is correctly structured for later use
-        range.range = {
-          start: range.start,
-          end: range.end
-        };
-      });
-    }
-  } catch (err) {
-    console.log("[DEBUG] ⚠️ Error in findStyleRanges:", err);
-    // Return an empty array in case of error
-    return [];
+      if (styleCounts[range.signature] > maxCount) {
+        maxCount = styleCounts[range.signature];
+        defaultSignature = range.signature;
+      }
+    });
+    
+    // Mark default and special ranges
+    ranges.forEach(range => {
+      range.isDefault = range.signature === defaultSignature;
+      range.isSpecial = !range.isDefault;
+    });
   }
   
   // Log style ranges for debugging
@@ -2877,110 +2597,46 @@ function describeFill(fills) {
 
 // Get the default style from style ranges
 function getDefaultStyle(styleRanges, node) {
-  try {
-    // Safety check for inputs
-    if (!styleRanges || !Array.isArray(styleRanges) || styleRanges.length === 0) {
-      console.log(`[DEBUG] ⚠️ No style ranges provided, using node's default style`);
-      return node ? {
-        fontName: node.fontName,
-        fontSize: node.fontSize,
-        fills: node.fills,
-        textDecoration: node.textDecoration
-      } : {};
-    }
-    
-    // Find the first default style
-    const defaultRange = styleRanges.find(r => r && r.isDefault);
-    if (defaultRange && defaultRange.style) {
-      console.log(`[DEBUG] 🎨 Using default style from range: "${defaultRange.text ? defaultRange.text.substring(0, 20) : ''}..."`);
-      return defaultRange.style;
-    }
-    
-    // Fallback to first style if no default marked
-    if (styleRanges[0] && styleRanges[0].style) {
-      console.log(`[DEBUG] 🎨 No default style found, using first style range as default`);
-      return styleRanges[0].style;
-    }
-    
-    // Fallback to node's default style
-    console.log(`[DEBUG] 🎨 Falling back to node's default style`);
-    return node ? {
-      fontName: node.fontName,
-      fontSize: node.fontSize,
-      fills: node.fills,
-      textDecoration: node.textDecoration
-    } : {};
-  } catch (error) {
-    console.log(`[DEBUG] ❌ Error in getDefaultStyle: ${error.message}`);
-    // Return an empty object as last resort
-    return {};
-  }
+  // Find the first default style
+  const defaultRange = styleRanges.find(r => r.isDefault);
+  if (defaultRange) return defaultRange.style;
+  
+  // Fallback to node's default style
+  return {
+    fontName: node.fontName,
+    fontSize: node.fontSize,
+    fills: node.fills,
+    textDecoration: node.textDecoration
+  };
 }
 
 // Map styles from original text to translated text
 async function mapStylesToTranslation(node, styleRanges, originalText, translatedText, targetLang) {
-  try {
-    // Safety checks for inputs
-    if (!node || !styleRanges || !originalText || !translatedText) {
-      console.log(`[DEBUG] ⚠️ Missing required parameters in mapStylesToTranslation`);
-      return;
+  // Only process special (non-default) styles
+  const specialRanges = styleRanges.filter(r => r.isSpecial);
+  if (specialRanges.length === 0) return;
+  
+  console.log(`Mapping ${specialRanges.length} special style ranges to translated text`);
+  
+  // Analyze the structure of original text
+  const originalStructure = analyzeTextStructure(originalText);
+  const translatedStructure = analyzeTextStructure(translatedText);
+  
+  // Map each special range based on structural analysis
+  for (const range of specialRanges) {
+    const positions = findCorrespondingPositions(
+      range, 
+      originalText, 
+      translatedText, 
+      originalStructure,
+      translatedStructure,
+      targetLang
+    );
+    
+    if (positions && positions.start >= 0 && positions.end > positions.start) {
+      console.log(`Applying special style to "${translatedText.substring(positions.start, positions.end)}"`);
+      await applyStyleToRange(node, positions.start, positions.end, range.style);
     }
-    
-    // Only process special (non-default) styles
-    const specialRanges = styleRanges.filter(r => r && r.isSpecial);
-    if (specialRanges.length === 0) {
-      console.log(`[DEBUG] 🗺️ No special style ranges to map`);
-      return;
-    }
-    
-    console.log(`[DEBUG] 🗺️ Mapping ${specialRanges.length} special style ranges to translated text`);
-    console.log(`[DEBUG] 🗺️ Original: "${originalText}"`);
-    console.log(`[DEBUG] 🗺️ Translated: "${translatedText}"`);
-    
-    // Try special pattern handling first (like "Reading lists")
-    const handledBySpecial = await handleSpecialTextPatterns(node, translatedText, originalText, styleRanges, targetLang);
-    if (handledBySpecial) {
-      console.log(`[DEBUG] 🗺️ Text was handled by special pattern handler, skipping standard mapping`);
-      return;
-    }
-    
-    // Standard approach for when special handling isn't applicable
-    // Analyze the structure of original text
-    const originalStructure = analyzeTextStructure(originalText);
-    const translatedStructure = analyzeTextStructure(translatedText);
-    
-    // For each special style range, find the corresponding position in translated text
-    for (const range of specialRanges) {
-      if (!range.range) {
-        console.log(`[DEBUG] ⚠️ Style range has no valid range property, skipping`);
-        continue;
-      }
-      
-      try {
-        const rangeText = originalText.substring(range.range.start, range.range.end);
-        console.log(`[DEBUG] 🗺️ Mapping style for "${rangeText}" to translated text`);
-        
-        const correspondingRange = findCorrespondingPositions(
-          range.range, 
-          originalText, 
-          translatedText,
-          originalStructure,
-          translatedStructure,
-          targetLang
-        );
-        
-        if (correspondingRange) {
-          console.log(`[DEBUG] 🗺️ Found corresponding position ${correspondingRange.start}-${correspondingRange.end}`);
-          await applyStyleToRange(node, correspondingRange, range.style);
-        } else {
-          console.log(`[DEBUG] ⚠️ Could not find corresponding position for "${rangeText}"`);
-        }
-      } catch (error) {
-        console.log(`[DEBUG] ❌ Error mapping style: ${error.message}`);
-      }
-    }
-  } catch (error) {
-    console.log(`[DEBUG] ❌ Error in mapStylesToTranslation: ${error.message}`);
   }
 }
 
@@ -3019,31 +2675,15 @@ function analyzeTextStructure(text) {
 function findCorrespondingPositions(range, originalText, translatedText, originalStructure, translatedStructure, targetLang) {
   const rangeText = range.text.trim();
   
-  // Special case for "Reading lists" scenarios for any language
-  if (languageConfig.hasReadingListPattern(rangeText, targetLang)) {
-    console.log(`[DEBUG] 🌍 Special handling for ${targetLang} pattern in findCorrespondingPositions`);
-    
-    // Try to find language equivalent using our helper
-    const translationInfo = findReadingListsInTranslation(translatedText, targetLang);
-    
-    if (translationInfo && translationInfo.found) {
-      console.log(`[DEBUG] 🌍 Found equivalent in ${targetLang} at positions ${translationInfo.start}-${translationInfo.end}: "${translationInfo.text}"`);
-      return {
-        start: translationInfo.start,
-        end: translationInfo.end
-      };
-    }
-  }
-  
   // Case 1: Special style at beginning of text
   if (range.start === 0 || originalText.indexOf(rangeText) === 0) {
     // If styled text is at start, map to beginning of translation
+    // Remove optional chaining
     const rangeWords = rangeText.match(/\S+/g);
     const wordCount = rangeWords ? rangeWords.length : 1;
     const translatedWordCount = Math.min(wordCount, Math.ceil(translatedStructure.wordCount * 0.3));
     const endWord = translatedStructure.words[translatedWordCount - 1] || '';
     
-    console.log(`[DEBUG] 🔍 Style at beginning: mapping to first ${translatedWordCount} words`);
     return {
       start: 0,
       end: translatedText.indexOf(endWord) + endWord.length
@@ -3054,12 +2694,12 @@ function findCorrespondingPositions(range, originalText, translatedText, origina
   if (range.end === originalText.length || 
       originalText.lastIndexOf(rangeText) + rangeText.length === originalText.length) {
     // If styled text is at end, map to end of translation
+    // Remove optional chaining
     const rangeWords = rangeText.match(/\S+/g);
     const wordCount = rangeWords ? rangeWords.length : 1;
     const startWordIndex = Math.max(0, translatedStructure.words.length - wordCount);
     const startWord = translatedStructure.words[startWordIndex] || '';
     
-    console.log(`[DEBUG] 🔍 Style at end: mapping to last ${wordCount} words`);
     return {
       start: translatedText.lastIndexOf(startWord),
       end: translatedText.length
@@ -3068,10 +2708,8 @@ function findCorrespondingPositions(range, originalText, translatedText, origina
   
   // Case 3: If text has a connector like "with", "using", etc.
   if (originalStructure.hasConnector && translatedStructure.hasConnector) {
-    console.log(`[DEBUG] 🔍 Text contains connector: "${originalStructure.connector}" / "${translatedStructure.connector}"`);
     // Check if styled range is before or after connector
     if (rangeText === originalStructure.beforeConnector) {
-      console.log(`[DEBUG] 🔍 Style applied to text before connector`);
       return {
         start: 0,
         end: translatedText.indexOf(translatedStructure.connector || '')
@@ -3079,9 +2717,9 @@ function findCorrespondingPositions(range, originalText, translatedText, origina
     }
     
     if (rangeText === originalStructure.afterConnector) {
-      console.log(`[DEBUG] 🔍 Style applied to text after connector`);
       const connectorPos = translatedText.indexOf(translatedStructure.connector || '');
       if (connectorPos >= 0) {
+        // Remove optional chaining
         const connectorLength = translatedStructure.connector ? translatedStructure.connector.length : 0;
         const afterConnectorPos = connectorPos + connectorLength;
         return {
@@ -3103,365 +2741,58 @@ function findCorrespondingPositions(range, originalText, translatedText, origina
   const wordBefore = translatedText.lastIndexOf(' ', approxStart) + 1;
   const wordAfter = translatedText.indexOf(' ', approxEnd);
   
-  // Use relative positioning by default
   return {
-    start: wordBefore >= 0 ? wordBefore : 0,
-    end: wordAfter >= 0 ? wordAfter : translatedText.length
+    start: wordBefore >= 0 ? wordBefore : approxStart,
+    end: wordAfter >= 0 ? wordAfter : approxEnd
   };
 }
 
 // Apply style to a specific text range
-async function applyStyleToRange(node, range, style) {
-  try {
-    // Handle both range object format and separate start/end parameters
-    const start = typeof range === 'object' ? range.start : range;
-    const end = typeof range === 'object' ? range.end : arguments[2];
-    const styleToApply = typeof range === 'object' ? style : arguments[3];
-    
-    // Enhanced validation
-    if (typeof start !== 'number' || typeof end !== 'number') {
-      console.log(`[DEBUG] ❌ Range values must be numbers: ${start}, ${end}`);
-      return false;
-    }
-    
-    if (start >= end || start < 0 || !styleToApply) {
-      console.log(`[DEBUG] ❌ Invalid range or style in applyStyleToRange`, { start, end, hasStyle: !!styleToApply });
-      return false;
-    }
-    
-    if (end > node.characters.length) {
-      console.log(`[DEBUG] ⚠️ End range (${end}) exceeds text length (${node.characters.length}), adjusting...`);
-      end = Math.min(end, node.characters.length);
-    }
-
-    console.log(`[DEBUG] 🖌️ Applying style to range ${start}-${end} on node "${node.characters.substring(0, 30)}..."`);
-    
-    if (!styleToApply) {
-      console.log(`[DEBUG] ❌ No style to apply`);
-      return false;
-    }
-    
-    // Check if we have a valid text node
-    if (node.type !== "TEXT") {
-      console.log(`[DEBUG] ❌ Node is not a text node (type: ${node.type})`);
-      return false;
-    }
-    
-    // Log style details for debugging
-    console.log(`[DEBUG] 🖌️ Style contains properties:`, Object.keys(styleToApply).join(', '));
-    
-    // Apply each style property individually with error handling
-    if (styleToApply.fontName) {
-      try {
-        console.log(`[DEBUG] 🖌️ Loading font: ${styleToApply.fontName.family}, ${styleToApply.fontName.style}`);
-        await figma.loadFontAsync(styleToApply.fontName);
-        node.setRangeFontName(start, end, styleToApply.fontName);
-        console.log(`[DEBUG] 🖌️ Font applied: ${styleToApply.fontName.family}`);
-      } catch (error) {
-        console.log(`[DEBUG] ⚠️ Error applying font: ${error.message}`);
-      }
-    }
-    
-    if (styleToApply.fills) {
-      try {
-        node.setRangeFills(start, end, styleToApply.fills);
-        console.log(`[DEBUG] 🖌️ Fill applied: ${describeFill(styleToApply.fills)}`);
-      } catch (error) {
-        console.log(`[DEBUG] ⚠️ Error applying fill: ${error.message}`);
-      }
-    }
-    
-    if (styleToApply.fontSize) {
-      try {
-        node.setRangeFontSize(start, end, styleToApply.fontSize);
-        console.log(`[DEBUG] 🖌️ Font size applied: ${styleToApply.fontSize}`);
-      } catch (error) {
-        console.log(`[DEBUG] ⚠️ Error applying font size: ${error.message}`);
-      }
-    }
-    
-    if (styleToApply.textDecoration) {
-      try {
-        node.setRangeTextDecoration(start, end, styleToApply.textDecoration);
-        console.log(`[DEBUG] 🖌️ Text decoration applied: ${styleToApply.textDecoration}`);
-      } catch (error) {
-        console.log(`[DEBUG] ⚠️ Error applying text decoration: ${error.message}`);
-      }
-    }
-    
-    return true;
-  } catch (error) {
-    console.log(`[DEBUG] ❌ Error in applyStyleToRange: ${error.message}`);
-    return false;
-  }
-}
-
-// Helper function to convert RGB to hex for logging
-function rgbToHex(color) {
-  if (!color) return 'undefined';
-  
-  const r = Math.round(color.r * 255);
-  const g = Math.round(color.g * 255);
-  const b = Math.round(color.b * 255);
-  
-  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
-}
-
-// Helper function to get the parent instance of a node
-function getInstanceParent(node) {
-  let current = node.parent;
-  while (current) {
-    if (current.type === "INSTANCE") {
-      return current;
-    }
-    current = current.parent;
-  }
-  return null;
-}
-
-// Language configuration - inlined from language-patterns.js
-// Import language patterns configuration
-const languageConfig = (function() {
-  /**
-   * Language-specific patterns and configurations
-   * This file centralizes all language-specific text patterns and rules
-   * used for translation processing and style mapping.
-   */
-  
-  const languagePatterns = {
-    // Hindi language patterns
-    hi: {
-      // Common patterns for "Reading lists" in Hindi
-      readingLists: {
-        patterns: [
-          "पढ़ने की सूची",
-          "पढ़ने की सूचियां",
-          "पढ़ने वाली सूची",
-          "रीडिंग लिस्ट",
-          "पढ़ने की सूचियों"
-        ],
-        // Fallback word to use when looking for reading lists
-        fallbackWord: "पढ़ने",
-        // Original text patterns to identify as reading lists
-        originalPatterns: ["reading list", "reading lists"]
-      },
-      // RTL settings for Hindi
-      rtl: false,
-      // Special text handling for Hindi
-      textHandling: {
-        // Add any special text handling rules here
-      }
-    },
-    // Add other languages as needed
-    ar: {
-      rtl: true,
-      readingLists: {
-        patterns: [
-          "قوائم القراءة",
-          "قائمة القراءة "
-        ],
-        originalPatterns: ["reading list", "reading lists"]
-      }
-    },
-    // Example for another language
-    fr: {
-      rtl: false,
-      readingLists: {
-        patterns: [
-          "Listes de lecture",
-          "Liste de lecture"
-        ],
-        originalPatterns: ["reading list", "reading lists"]
-      }
-    }
-  };
-  
-  /**
-   * Utility function to find reading list patterns in translated text
-   * @param {string} translatedText - The translated text to search in
-   * @param {string} langCode - The language code (e.g., 'hi', 'ar')
-   * @return {Object} Result containing found status, positions, and text
-   */
-  function findReadingListsInLanguage(translatedText, langCode) {
-    // Default return structure
-    const result = {
-      found: false,
-      start: 0,
-      end: 0,
-      text: ""
-    };
-    
-    // Get language patterns or use empty object if language not supported
-    const langConfig = languagePatterns[langCode] || {};
-    const readingListsConfig = langConfig.readingLists || { patterns: [] };
-    
-    if (!translatedText || !readingListsConfig.patterns) {
-      console.log(`[DEBUG] 🌍 No patterns defined for language: ${langCode}`);
-      return result;
-    }
-    
-    // Try to find any of the patterns
-    for (const pattern of readingListsConfig.patterns) {
-      const index = translatedText.indexOf(pattern);
-      if (index >= 0) {
-        result.found = true;
-        result.start = index;
-        result.end = index + pattern.length;
-        result.text = pattern;
-        console.log(`[DEBUG] 🌍 Found exact pattern for ${langCode}: "${pattern}" at position ${index}`);
-        return result;
-      }
-    }
-    
-    // Fallback: if none of the exact patterns match but fallback word exists
-    if (readingListsConfig.fallbackWord) {
-      const fallbackWord = readingListsConfig.fallbackWord;
-      const index = translatedText.indexOf(fallbackWord);
-      
-      if (index >= 0) {
-        // Find a reasonable end by looking for the next space or a few characters
-        let end = translatedText.indexOf(" ", index + fallbackWord.length);
-        if (end < 0) end = Math.min(index + 20, translatedText.length);
-        
-        result.found = true;
-        result.start = index;
-        result.end = end;
-        result.text = translatedText.substring(index, end);
-        console.log(`[DEBUG] 🌍 Found fallback word for ${langCode} and expanded to: "${result.text}"`);
-        return result;
-      }
-    }
-    
-    // Final fallback: If we still haven't found anything but translation exists
-    if (translatedText && translatedText.length > 0) {
-      // Last resort: just use the first two words of the translation
-      const words = translatedText.split(' ');
-      if (words.length >= 2) {
-        const firstTwoWords = words.slice(0, 2).join(' ');
-        result.found = true;
-        result.start = 0;
-        result.end = firstTwoWords.length;
-        result.text = firstTwoWords;
-        console.log(`[DEBUG] 🌍 Using first two words as fallback for ${langCode}: "${result.text}"`);
-      }
-    }
-    
-    console.log(`[DEBUG] 🌍 findReadingListsInLanguage result for ${langCode}:`, result);
-    return result;
-  }
-  
-  /**
-   * Check if the text contains a reading list pattern in the original language
-   * @param {string} text - The original text to check
-   * @param {string} langCode - The language code
-   * @return {boolean} True if text contains a reading list pattern
-   */
-  function hasReadingListPattern(text, langCode) {
-    if (!text) return false;
-    
-    const langConfig = languagePatterns[langCode] || {};
-    const readingListsConfig = langConfig.readingLists || {};
-    const patterns = readingListsConfig.originalPatterns || [];
-    
-    // Check if the text contains any of the patterns (case insensitive)
-    const lowerText = text.toLowerCase();
-    return patterns.some(pattern => lowerText.includes(pattern.toLowerCase()));
-  }
-  
-  /**
-   * Check if a language is RTL
-   * @param {string} langCode - The language code
-   * @return {boolean} True if the language is RTL
-   */
-  function isRTLLanguage(langCode) {
-    const langConfig = languagePatterns[langCode] || {};
-    return !!langConfig.rtl;
-  }
-  
-  return {
-    languagePatterns,
-    findReadingListsInLanguage,
-    hasReadingListPattern,
-    isRTLLanguage
-  };
-})();
-
-// Helper function to find the equivalent of "Reading lists" in translated text
-function findReadingListsInTranslation(translatedText, targetLang) {
-  return languageConfig.findReadingListsInLanguage(translatedText, targetLang);
-}
-
-// Special handler for translations with "Reading lists" patterns
-async function handleSpecialTextPatterns(node, translatedText, originalText, styleRanges, targetLang) {
-  console.log(`[DEBUG] 🌍 Handling special patterns for ${targetLang} translation`);
+async function applyStyleToRange(node, start, end, style) {
+  if (start >= end || start < 0) return;
   
   try {
-    // Safety checks for inputs
-    if (!node || !translatedText || !originalText || !styleRanges) {
-      console.log(`[DEBUG] ❌ Missing required parameters in handleSpecialTextPatterns`);
-      return false;
+    // Load font first
+    if (style.fontName) {
+      await figma.loadFontAsync(style.fontName);
+      node.setRangeFontName(start, end, style.fontName);
     }
     
-    // Check if this is a text with "Reading lists" or similar special pattern
-    if (!languageConfig.hasReadingListPattern(originalText, targetLang)) {
-      console.log(`[DEBUG] 🌍 Text does not contain special patterns for ${targetLang}, skipping special handling`);
-      return false;
-    }
-    
-    console.log(`[DEBUG] 🌍 Processing ${targetLang} translation with special pattern`);
-    console.log(`[DEBUG] 🌍 Original: "${originalText}"`);
-    console.log(`[DEBUG] 🌍 Translated: "${translatedText}"`);
-    
-    // Find the special blue style range used for "Reading lists"
-    const specialStyleRange = styleRanges.find(r => 
-      r && r.style && r.style.fills && 
-      r.style.fills.some(fill => 
-        fill && fill.type === 'SOLID' && 
-        fill.color && 
-        fill.color.b > 0.6 && 
-        fill.color.r < 0.3
-      ) &&
-      r.text && languageConfig.hasReadingListPattern(r.text, targetLang)
-    );
-    
-    if (!specialStyleRange) {
-      console.log(`[DEBUG] 🌍 Could not find special style for pattern in ${targetLang}, falling back to normal handling`);
-      return false;
-    }
-    
-    console.log(`[DEBUG] 🌍 Found special style for pattern: "${specialStyleRange.text}"`);
-    
-    // Find the equivalent for the pattern in the target language
-    const translationInfo = findReadingListsInTranslation(translatedText, targetLang);
-    
-    if (!translationInfo || !translationInfo.found) {
-      console.log(`[DEBUG] 🌍 Could not find equivalent for pattern in ${targetLang}, falling back`);
-      return false;
-    }
-    
-    console.log(`[DEBUG] 🌍 Found equivalent in ${targetLang} at positions ${translationInfo.start}-${translationInfo.end}: "${translationInfo.text}"`);
-    
-    // Apply the base style to the entire text first
-    const defaultStyle = getDefaultStyle(styleRanges, node);
-    
-    if (defaultStyle) {
-      console.log(`[DEBUG] 🌍 Applying default style to entire text`);
-      await applyStyleToRange(node, 0, translatedText.length, defaultStyle);
-    }
-    
-    // Apply the special style to the equivalent text in the target language
-    console.log(`[DEBUG] 🌍 Applying special style to phrase: "${translationInfo.text}"`);
-    const success = await applyStyleToRange(node, translationInfo.start, translationInfo.end, specialStyleRange.style);
-    
-    if (success) {
-      console.log(`[DEBUG] 🌍 Successfully applied style to phrase in ${targetLang}`);
-      return true;
-    } else {
-      console.log(`[DEBUG] ❌ Failed to apply style to phrase in ${targetLang}, falling back to normal handling`);
-      return false;
-    }
-  } catch (error) {
-    console.log(`[DEBUG] ❌ Error in handleSpecialTextPatterns: ${error.message}`);
-    return false;
+    // Apply all style properties
+    if (style.fontSize) node.setRangeFontSize(start, end, style.fontSize);
+    if (style.fills) node.setRangeFills(start, end, style.fills);
+    if (style.textDecoration) node.setRangeTextDecoration(start, end, style.textDecoration);
+  } catch (e) {
+    console.error(`Failed to apply style to range ${start}-${end}:`, e);
   }
 }
+
+// Find a place where you render your plugin UI and add these options
+// For example, if there's a place where you create your UI elements, add:
+
+// Create force retranslation option
+const forceRetranslateSection = figma.createWidget({
+  type: 'horizontal',
+  children: [
+    {
+      type: 'checkbox',
+      name: 'forceRetranslate',
+      label: 'Force retranslation (ignore cache)',
+      value: false
+    }
+  ]
+});
+
+// Create clear cache button
+const clearCacheButton = figma.createWidget({
+  type: 'button',
+  text: 'Clear Translation Cache',
+  onClick: () => {
+    clearTranslationCache();
+    figma.notify('Translation cache cleared');
+  }
+});
+
+// When you read your UI values and call startTranslation, pass the force retranslate flag:
+const forceRetranslate = document.getElementById('forceRetranslate').checked;
+startTranslation(selection, targetLang, forceRetranslate);
