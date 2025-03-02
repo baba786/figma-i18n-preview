@@ -198,26 +198,30 @@ app.post('/translate', async (req, res) => {
       console.log(`Translation request includes ${styleInfo.length} style markers`);
       
       // Create a more detailed prompt for Claude that includes style information
-      promptText = `Translate the following text to ${targetLang}. 
+      promptText = `Translate the following text to ${targetLang} while preserving the styling information.
 
-The text contains styled portions that need special attention. In the original text, these parts have special formatting with specific colors:
+The text contains styled portions with specific colors that must be preserved in the translation:
 
 ${styleInfo.map(style => `- "${style.text}" is styled with color ${style.color}`).join('\n')}
 
+INSTRUCTIONS:
 1. First, translate the entire text accurately to ${targetLang}.
-2. Then, specify EXACTLY which words or phrases in the translated text should have the same styling as in the original text.
+2. Then, for EACH styled portion in the original text, specify the EXACT corresponding words or phrases in your translation that should have the same styling.
+3. Be extremely precise about which words in the translation correspond to the styled words in the original.
+4. Maintain the same semantic meaning in the styled portions.
 
-Format your response like this:
+Format your response EXACTLY like this:
 TRANSLATION: [your full translation goes here]
 STYLING:
 - "${styleInfo[0] && styleInfo[0].text}" (${styleInfo[0] && styleInfo[0].color || 'blue'}) → "[equivalent words in translation]"
 ${styleInfo.length > 1 ? styleInfo.slice(1).map(style => `- "${style.text}" (${style.color}) → "[equivalent words in translation]"`).join('\n') : ''}
 
-IMPORTANT GUIDELINES FOR STYLING:
-- For each styled portion, identify the EXACT corresponding words in the translation
-- Make sure the styled portions in the translation are meaningful equivalents
-- If a style applies to a noun phrase in English, apply it to the complete noun phrase in the translated text
-- For Hindi: Pay special attention to word order differences and identify the complete equivalent phrase
+CRITICAL STYLING GUIDELINES:
+- The styling mappings MUST be exact and complete - include every styled portion
+- If a style applies to a specific word or phrase, map it to the complete equivalent in the translation
+- Preserve the exact RGB color values from the original text
+- For languages with different word order (like Hindi, Japanese, Arabic), carefully identify the complete equivalent phrases
+- If a styled portion contains multiple words, make sure ALL corresponding words in the translation are included
 
 Here's the text to translate:
 
@@ -316,36 +320,63 @@ Here's the text to translate:
               
               // Parse the styling information
               // Format expected: "original text" (color) → "translated text"
-              const styleLines = stylingText.split('\n').filter(line => line.includes('→') || line.includes('->'));
+              const styleLines = stylingText.split('\n').filter(line => 
+                (line.includes('→') || line.includes('->')) && 
+                (line.includes('"') || line.includes("'"))
+              );
               
               if (styleLines.length > 0) {
                 styleMapping = styleLines.map(line => {
                   console.log(`Processing style line: "${line}"`);
                   
-                  // Extract original text, color, and translated text with improved regex
-                  // This handles both quoted and unquoted text, and both → and -> arrows
-                  const originalMatch = line.match(/"([^"]+)"/) || line.match(/^[^(]*/);
+                  // Enhanced regex for more robust extraction
+                  // Match original text in quotes
+                  const originalMatch = line.match(/"([^"]+)"/) || line.match(/'([^']+)'/) || line.match(/^[^(]*/);
+                  
+                  // Match color in parentheses
                   const colorMatch = line.match(/\(([^)]+)\)/);
-                  const translatedMatch = line.match(/(?:→|->)\s*"([^"]+)"/) || line.match(/(?:→|->)\s*([^"(][^(]*)/);
+                  
+                  // Match translated text after arrow (→ or ->)
+                  const translatedMatch = line.match(/(?:→|->)\s*"([^"]+)"/) || 
+                                         line.match(/(?:→|->)\s*'([^']+)'/) || 
+                                         line.match(/(?:→|->)\s*([^"'(][^(]*)/);
                   
                   if (originalMatch && translatedMatch) {
+                    // Extract the matched groups with better fallbacks
                     const originalText = originalMatch[1] ? originalMatch[1].trim() : originalMatch[0].trim();
                     const translatedText = translatedMatch[1] ? translatedMatch[1].trim() : translatedMatch[0].trim();
-                    const color = colorMatch ? colorMatch[1].trim() : "#0000FF"; // Default to blue if color not found
+                    
+                    // Process color with validation
+                    let color = "#0000FF"; // Default blue
+                    if (colorMatch && colorMatch[1]) {
+                      const colorValue = colorMatch[1].trim();
+                      // Check if it's a valid color format (hex, rgb, or named color)
+                      if (colorValue.match(/^#[0-9A-Fa-f]{3,8}$/) || 
+                          colorValue.match(/^rgb\(\s*\d+\s*,\s*\d+\s*,\s*\d+\s*\)$/) ||
+                          colorValue.match(/^[a-zA-Z]+$/)) {
+                        color = colorValue;
+                      }
+                    }
                     
                     console.log(`Mapped style: "${originalText}" -> "${translatedText}" (${color})`);
                     
                     return {
                       originalText: originalText,
                       color: color,
-                      translatedText: translatedText
+                      translatedText: translatedText,
+                      // Add additional metadata to help with matching
+                      originalWords: originalText.split(/\s+/).length,
+                      translatedWords: translatedText.split(/\s+/).length
                     };
                   }
                   return null;
                 }).filter(item => item !== null);
                 
-                console.log(`Successfully parsed ${styleMapping.length} style mappings`);
+                // Sort mappings by length (longer original texts first) to handle nested styling correctly
+                styleMapping.sort((a, b) => b.originalText.length - a.originalText.length);
               }
+              
+              console.log(`Successfully parsed ${styleMapping.length} style mappings`);
             }
           }
         } else {
