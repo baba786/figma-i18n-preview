@@ -2056,6 +2056,134 @@ function captureAllNodeStyles(node) {
   return styles;
 }
 
+// Enhanced style capture function with better color handling
+function captureCompleteNodeStyles(node) {
+  console.log('[DEBUG] 🎨 Capturing complete styles for:', node.characters.substring(0, 30) + (node.characters.length > 30 ? '...' : ''));
+  
+  // Basic node styles
+  const styles = {
+    // Node properties
+    fontName: node.fontName,
+    fontSize: node.fontSize,
+    fills: deepCloneWithColorNormalization(node.fills),
+    textCase: node.textCase,
+    textDecoration: node.textDecoration,
+    letterSpacing: node.letterSpacing,
+    lineHeight: node.lineHeight,
+    paragraphSpacing: node.paragraphSpacing,
+    paragraphIndent: node.paragraphIndent,
+    textAlignHorizontal: node.textAlignHorizontal,
+    textAlignVertical: node.textAlignVertical,
+    
+    // Character styles (with position and character)
+    characterStyles: [],
+    
+    // Word-level styles for better mapping
+    wordStyles: [],
+    
+    // Summary for logging
+    summary: {
+      totalCharacters: node.characters.length,
+      uniqueColors: 0,
+      uniqueFonts: 0
+    }
+  };
+  
+  // Get character-by-character styling
+  try {
+    const text = node.characters;
+    const uniqueColors = new Set();
+    const uniqueFonts = new Set();
+    
+    // First pass: capture character styles
+    for (let i = 0; i < text.length; i++) {
+      const fills = deepCloneWithColorNormalization(node.getRangeFills(i, i+1));
+      const fontName = node.getRangeFontName(i, i+1);
+      
+      // Track unique styles
+      if (fills && fills.length > 0 && fills[0].type === 'SOLID') {
+        const colorKey = `${fills[0].color.r},${fills[0].color.g},${fills[0].color.b}`;
+        uniqueColors.add(colorKey);
+      }
+      
+      if (fontName) {
+        uniqueFonts.add(`${fontName.family}-${fontName.style}`);
+      }
+      
+      styles.characterStyles.push({
+        position: i,
+        character: text[i],
+        fontName: fontName,
+        fontSize: node.getRangeFontSize(i, i+1),
+        fills: fills,
+        textDecoration: node.getRangeTextDecoration(i, i+1)
+      });
+    }
+    
+    // Second pass: group by words for better mapping
+    const words = text.split(/(\s+)/);
+    let position = 0;
+    
+    for (const word of words) {
+      if (word.length > 0) {
+        const wordStyle = {
+          text: word,
+          start: position,
+          end: position + word.length,
+          styles: {}
+        };
+        
+        // Get the dominant style for this word
+        const firstCharStyle = styles.characterStyles[position];
+        if (firstCharStyle) {
+          wordStyle.styles = {
+            fontName: firstCharStyle.fontName,
+            fontSize: firstCharStyle.fontSize,
+            fills: firstCharStyle.fills,
+            textDecoration: firstCharStyle.textDecoration
+          };
+        }
+        
+        styles.wordStyles.push(wordStyle);
+      }
+      position += word.length;
+    }
+    
+    // Update summary
+    styles.summary.uniqueColors = uniqueColors.size;
+    styles.summary.uniqueFonts = uniqueFonts.size;
+    
+  } catch (error) {
+    console.error('[DEBUG] ❌ Error capturing complete styles:', error);
+  }
+  
+  return styles;
+}
+
+// Helper function to deep clone with color normalization
+function deepCloneWithColorNormalization(fills) {
+  if (!fills || !Array.isArray(fills)) return fills;
+  
+  return fills.map(fill => {
+    // Deep clone the fill
+    const newFill = JSON.parse(JSON.stringify(fill));
+    
+    // Normalize color values if this is a solid fill
+    if (newFill.type === 'SOLID' && newFill.color) {
+      newFill.color.r = Math.max(0, Math.min(1, newFill.color.r));
+      newFill.color.g = Math.max(0, Math.min(1, newFill.color.g));
+      newFill.color.b = Math.max(0, Math.min(1, newFill.color.b));
+      if (typeof newFill.color.a !== 'undefined') {
+        newFill.color.a = Math.max(0, Math.min(1, newFill.color.a));
+      } else {
+        newFill.color.a = 1; // Default alpha if not specified
+      }
+    }
+    
+    return newFill;
+  });
+}
+
 // Add this simple function to apply styles
 async function applyAllNodeStyles(node, styles, translatedText) {
   console.log('Applying styles to:', translatedText);
@@ -2587,6 +2715,10 @@ async function preserveTextStyles(node, originalText, translatedText, targetLang
   try {
     console.log(`[DEBUG] 🎨 Preserving text styles for translation to ${targetLang}`);
     
+    // Capture the original node styles before modifying it
+    const originalStyles = captureCompleteNodeStyles(node);
+    console.log(`[DEBUG] 🎨 Captured original styles:`, JSON.stringify(originalStyles.summary));
+    
     // Load the font before applying any styles
     await figma.loadFontAsync(node.fontName);
     
@@ -2618,19 +2750,61 @@ async function preserveTextStyles(node, originalText, translatedText, targetLang
           const matchingRange = styleRanges.find(range => {
             if (!range || !range.range) return false;
             const rangeText = originalText.substring(range.range.start, range.range.end);
-            const isMatch = rangeText.includes(mapping.originalText);
-            console.log(`[DEBUG] 🎨 Checking if "${rangeText}" includes "${mapping.originalText}": ${isMatch}`);
+            // More flexible matching - check if either text contains the other
+            const isMatch = rangeText.includes(mapping.originalText) || 
+                           mapping.originalText.includes(rangeText);
+            console.log(`[DEBUG] 🎨 Checking if "${rangeText}" matches "${mapping.originalText}": ${isMatch}`);
             return isMatch;
           });
           
           if (matchingRange && matchingRange.style) {
             console.log(`[DEBUG] 🎨 Applying style to "${mapping.translatedText}" based on Claude's mapping`);
             
-            // Find the position of the translated text to style
-            const startPos = translatedText.indexOf(mapping.translatedText);
+            // Find the position of the translated text to style - use more flexible matching
+            let startPos = translatedText.indexOf(mapping.translatedText);
+            
+            // If exact match fails, try case-insensitive match
+            if (startPos === -1) {
+              const lowerTranslatedText = translatedText.toLowerCase();
+              const lowerMappingText = mapping.translatedText.toLowerCase();
+              startPos = lowerTranslatedText.indexOf(lowerMappingText);
+              
+              if (startPos !== -1) {
+                console.log(`[DEBUG] 🎨 Found case-insensitive match for "${mapping.translatedText}"`);
+              }
+            }
+            
+            // If still no match, try fuzzy matching by words
+            if (startPos === -1) {
+              const translatedWords = translatedText.split(/\s+/);
+              const mappingWords = mapping.translatedText.split(/\s+/);
+              
+              // Try to find a sequence of words that match
+              for (let i = 0; i <= translatedWords.length - mappingWords.length; i++) {
+                const potentialMatch = translatedWords.slice(i, i + mappingWords.length).join(' ');
+                if (potentialMatch.toLowerCase().includes(mappingWords[0].toLowerCase())) {
+                  // Calculate the position in the original string
+                  startPos = translatedText.indexOf(potentialMatch);
+                  console.log(`[DEBUG] 🎨 Found fuzzy match: "${potentialMatch}" for "${mapping.translatedText}"`);
+                  break;
+                }
+              }
+            }
+            
             if (startPos !== -1) {
-              const endPos = startPos + mapping.translatedText.length;
-              await applyStyleToRange(node, startPos, endPos, matchingRange.style);
+              const endPos = startPos + (mapping.translatedText.length || 1);
+              
+              // Ensure we have valid style information with color
+              const styleToApply = { ...matchingRange.style };
+              
+              // Log the style we're about to apply
+              console.log(`[DEBUG] 🎨 Style to apply:`, JSON.stringify({
+                fills: styleToApply.fills ? describeFill(styleToApply.fills) : 'none',
+                fontName: styleToApply.fontName,
+                fontSize: styleToApply.fontSize
+              }));
+              
+              await applyStyleToRange(node, startPos, endPos, styleToApply);
               stylesApplied = true;
             } else {
               console.log(`[DEBUG] ⚠️ Could not find "${mapping.translatedText}" in the translated text`);
@@ -3164,10 +3338,30 @@ async function applyStyleToRange(node, range, style) {
     
     if (styleToApply.fills) {
       try {
-        node.setRangeFills(start, end, styleToApply.fills);
-        console.log(`[DEBUG] 🖌️ Fill applied: ${describeFill(styleToApply.fills)}`);
+        // Ensure fills are in the correct format
+        const validFills = styleToApply.fills.map(fill => {
+          // Deep clone the fill to avoid reference issues
+          const newFill = JSON.parse(JSON.stringify(fill));
+          
+          // Ensure color values are within valid range (0-1)
+          if (newFill.type === 'SOLID' && newFill.color) {
+            newFill.color.r = Math.max(0, Math.min(1, newFill.color.r));
+            newFill.color.g = Math.max(0, Math.min(1, newFill.color.g));
+            newFill.color.b = Math.max(0, Math.min(1, newFill.color.b));
+            if (typeof newFill.color.a !== 'undefined') {
+              newFill.color.a = Math.max(0, Math.min(1, newFill.color.a));
+            } else {
+              newFill.color.a = 1; // Default alpha if not specified
+            }
+          }
+          return newFill;
+        });
+        
+        console.log(`[DEBUG] 🖌️ Applying fills:`, JSON.stringify(validFills));
+        node.setRangeFills(start, end, validFills);
+        console.log(`[DEBUG] 🖌️ Fill applied: ${describeFill(validFills)}`);
       } catch (error) {
-        console.log(`[DEBUG] ⚠️ Error applying fill: ${error.message}`);
+        console.log(`[DEBUG] ⚠️ Error applying fill: ${error.message}`, error);
       }
     }
     
